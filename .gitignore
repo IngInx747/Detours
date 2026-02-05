@@ -39,3 +39,4 @@ obj.*
 /bin.*
 *.vcxproj.FileListAbsolute.txt
 *.vcxprojAssemblyReference.cache
+[Bb]uild*/
