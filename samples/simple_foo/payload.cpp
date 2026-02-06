@@ -1,6 +1,6 @@
 //////////////////////////////////////////////////////////////////////////////
 //
-//  Test a detour of a member function (member.x64.cpp of member.exe)
+//  Test a detour of a static linked function
 //
 //  Microsoft Research Detours Package
 //
@@ -29,14 +29,30 @@ static void *GetFunctionAddress(HANDLE hProcess, PCSTR Name)
     return (void*)syminfo.Address;
 }
 
-typedef void (*foo_functor)(void);
+static LONG HookFunction(PVOID& pTarget, PVOID pDetour)
+{
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&(PVOID&)pTarget, pDetour);
+    return DetourTransactionCommit();
+}
 
+static LONG UnhookFunction(PVOID& pTarget, PVOID pDetour)
+{
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourDetach(&(PVOID&)pTarget, pDetour);
+    return DetourTransactionCommit();
+}
+
+typedef void (*functor_foo)(void);
 static void (*original_foo)(void) = NULL;
 
 void WINAPI detoured_foo()
 {
+    printf("[detoured] Before foo\n");
     original_foo();
-    printf("detoured foo\n");
+    printf("[detoured] after  foo\n");
     fflush(stdout);
 }
 
@@ -52,28 +68,16 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 
     if (dwReason == DLL_PROCESS_ATTACH) {
         DetourRestoreAfterWith();
+        printf("foo_payload.dll: Loaded.\n"); fflush(stdout);
 
-        printf("foo_payload.dll: Loaded.\n");
-        fflush(stdout);
-
-        original_foo = (foo_functor)GetFunctionAddress(GetCurrentProcess(), "foo");
-
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-        DetourAttach(&(PVOID&)original_foo, detoured_foo);
-        error = DetourTransactionCommit();
-
-        if (error == NO_ERROR)
-            printf("foo_payload.dll: Error detouring foo(): err = %ld\n", error);
+        original_foo = (functor_foo)GetFunctionAddress(GetCurrentProcess(), "foo");
+        error = HookFunction((PVOID&)original_foo, detoured_foo);
+        if (error) printf("foo_payload.dll: Error detouring foo(): err = %ld\n", error);
     }
-    else if (dwReason == DLL_PROCESS_DETACH) {
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-        DetourDetach(&(PVOID&)original_foo, detoured_foo);
-        error = DetourTransactionCommit();
-
-        printf("foo_payload.dll: Unloaded\n");
-        fflush(stdout);
+    else if (dwReason == DLL_PROCESS_DETACH)
+    {
+        error = UnhookFunction((PVOID&)original_foo, detoured_foo);
+        printf("foo_payload.dll: Unloaded\n"); fflush(stdout);
     }
     return TRUE;
 }

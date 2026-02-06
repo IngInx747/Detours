@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include "foo.h"
 
-int __cdecl main(int argc, char ** argv)
+int main(int argc, char ** argv)
 {
     while (true)
     {
