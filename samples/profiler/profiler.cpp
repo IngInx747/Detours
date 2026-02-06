@@ -2,6 +2,8 @@
 #include <windows.h>
 #include <detours.h>
 #include <strsafe.h>
+#include <vector>
+#include <string>
 
 struct ExportContext
 {
@@ -31,15 +33,7 @@ static BOOL CALLBACK ExportCallback(
 
 int main(int argc, char** argv)
 {
-  LPCSTR rpszDllsRaw[256];
-  LPCSTR rpszDllsOut[256];
-  DWORD nDlls = 0;
-
-  for (DWORD n = 0; n < ARRAYSIZE(rpszDllsRaw); n++)
-  {
-    rpszDllsRaw[n] = NULL;
-    rpszDllsOut[n] = NULL;
-  }
+  std::vector<LPCSTR> rpszDllsRaw {};
 
   int arg = 1; for (; arg < argc && (argv[arg][0] == '-' || argv[arg][0] == '/'); arg++)
   {
@@ -51,15 +45,9 @@ int main(int argc, char** argv)
       *argp++ = '\0';
 
     switch (argn[0]) {
-    case 'd':                                     // Set DLL Name
+    case 'd': // Set DLL Name
     case 'D':
-      if (nDlls < ARRAYSIZE(rpszDllsRaw)) {
-        rpszDllsRaw[nDlls++] = argp;
-      }
-      else {
-        printf("profiler.exe: Too many DLLs.\n");
-        break;
-      }
+      rpszDllsRaw.push_back(argp);
       break;
 
     default:
@@ -69,46 +57,51 @@ int main(int argc, char** argv)
   }
 
   if (arg >= argc) {
-      return 9001;
+    return 9001;
   }
 
-  if (nDlls == 0) {
-      return 9001;
+  if (rpszDllsRaw.empty()) {
+    return 9001;
   }
 
   /////////////////////////////////////////////////////////// Validate DLLs.
-  for (DWORD n = 0; n < nDlls; n++)
+
+  std::vector<std::string> rpszDllsOut {};
+
+  for (const auto &rpszDllRaw : rpszDllsRaw)
   {
     CHAR szDllPath[1024];
     PCHAR pszFilePart = NULL;
 
-    if (!GetFullPathNameA(rpszDllsRaw[n], ARRAYSIZE(szDllPath), szDllPath, &pszFilePart)) {
-      printf("profiler.exe: Error: %s is not a valid path name..\n", rpszDllsRaw[n]);
+    if (!GetFullPathNameA(rpszDllRaw, ARRAYSIZE(szDllPath), szDllPath, &pszFilePart)) {
+      printf("profiler.exe: Error: %s is not a valid path name..\n", rpszDllRaw);
       return 9002;
     }
 
-    DWORD c = (DWORD)strlen(szDllPath) + 1;
-    PCHAR psz = new CHAR[c];
-    StringCchCopyA(psz, c, szDllPath);
-    rpszDllsOut[n] = psz;
+    rpszDllsOut.emplace_back(szDllPath);
+    const auto &dllPath = rpszDllsOut.back();
 
-    HMODULE hDll = LoadLibraryExA(rpszDllsOut[n], NULL, DONT_RESOLVE_DLL_REFERENCES);
+    HMODULE hDll = LoadLibraryExA(dllPath.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES);
     if (hDll == NULL) {
-      printf("profiler.exe: Error: %s failed to load (error %ld).\n", rpszDllsOut[n], GetLastError());
+      printf("profiler.exe: Error: %s failed to load (error %ld).\n", dllPath.c_str(), GetLastError());
       return 9003;
     }
 
-    ExportContext ec;
-    ec.fHasOrdinal1 = FALSE;
-    ec.nExports = 0;
+    ExportContext ec { FALSE, 0 };
     DetourEnumerateExports(hDll, &ec, ExportCallback);
     FreeLibrary(hDll);
 
     if (!ec.fHasOrdinal1) {
-      printf("profiler.exe: Error: %s does not export ordinal #1.\n", rpszDllsOut[n]);
+      printf("profiler.exe: Error: %s does not export ordinal #1.\n", dllPath.c_str());
       printf("             See help entry DetourCreateProcessWithDllEx in Detours.chm.\n");
       return 9004;
     }
+  }
+
+  DWORD nDlls {};
+  LPCSTR rpszDllsRef[1024];
+  for (const auto &rpszDll : rpszDllsOut) {
+    rpszDllsRef[nDlls++] = rpszDll.c_str();
   }
 
   //////////////////////////////////////////////////////////////////////////
@@ -142,9 +135,10 @@ int main(int argc, char** argv)
       StringCchCatA(szCommand, sizeof(szCommand), " ");
     }
   }
+
   printf("profiler.exe: Starting: `%s'\n", szCommand);
-  for (DWORD n = 0; n < nDlls; n++) {
-    printf("profiler.exe:   with `%s'\n", rpszDllsOut[n]);
+  for (const auto &rpszDll : rpszDllsOut) {
+    printf("profiler.exe:   with `%s'\n", rpszDll.c_str());
   }
   fflush(stdout);
 
@@ -155,7 +149,7 @@ int main(int argc, char** argv)
 
   if (!DetourCreateProcessWithDllsA(szFullExe[0] ? szFullExe : NULL, szCommand,
     NULL, NULL, TRUE, dwFlags, NULL, NULL,
-    &si, &pi, nDlls, rpszDllsOut, NULL))
+    &si, &pi, nDlls, rpszDllsRef, NULL))
   {
     DWORD dwError = GetLastError();
     printf("profiler.exe: DetourCreateProcessWithDllEx failed: %ld\n", dwError);
@@ -170,13 +164,6 @@ int main(int argc, char** argv)
   if (!GetExitCodeProcess(pi.hProcess, &dwResult)) {
       printf("profiler.exe: GetExitCodeProcess failed: %ld\n", GetLastError());
       return 9010;
-  }
-
-  for (DWORD n = 0; n < nDlls; n++) {
-    if (rpszDllsOut[n] != NULL) {
-      delete[] rpszDllsOut[n];
-      rpszDllsOut[n] = NULL;
-    }
   }
 
   return dwResult;
