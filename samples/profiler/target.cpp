@@ -11,7 +11,11 @@ __declspec(noinline) void foo()
 
 int main(int argc, char** argv)
 {
-  while (true)
+  int n = 10;
+  if (argc > 1)
+    n = atoi(argv[1]);
+
+  for (int i = 0; i < n; i++)
   {
     foo();
   }

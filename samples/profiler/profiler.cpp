@@ -93,7 +93,7 @@ int main(int argc, char** argv)
 
     if (!ec.fHasOrdinal1) {
       printf("profiler.exe: Error: %s does not export ordinal #1.\n", dllPath.c_str());
-      printf("             See help entry DetourCreateProcessWithDllEx in Detours.chm.\n");
+      printf("              See help entry DetourCreateProcessWithDllEx in Detours.chm.\n");
       return 9004;
     }
   }
@@ -105,16 +105,10 @@ int main(int argc, char** argv)
   }
 
   //////////////////////////////////////////////////////////////////////////
-  STARTUPINFOA si;
-  PROCESS_INFORMATION pi;
   CHAR szCommand[2048];
   CHAR szExe[1024];
   CHAR szFullExe[1024] = "\0";
   PCHAR pszFileExe = NULL;
-
-  ZeroMemory(&si, sizeof(si));
-  ZeroMemory(&pi, sizeof(pi));
-  si.cb = sizeof(si);
 
   szCommand[0] = L'\0';
 
@@ -142,10 +136,30 @@ int main(int argc, char** argv)
   }
   fflush(stdout);
 
-  DWORD dwFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED;
+  //////////////////////////////////////////////////////////////////////////
+  HANDLE hPipe = CreateNamedPipeA(
+    "\\\\.\\pipe\\profiler_pipe",
+    PIPE_ACCESS_INBOUND,
+    PIPE_TYPE_BYTE | PIPE_WAIT,
+    1, 0, 0, 0, NULL);
+  
+  if (hPipe == NULL || hPipe == INVALID_HANDLE_VALUE) {
+    printf("profiler.exe: CreateNamedPipe failed: %ld\n", GetLastError());
+    return 9005;
+  }
+
+  //////////////////////////////////////////////////////////////////////////
+  STARTUPINFOA si;
+  PROCESS_INFORMATION pi;
+
+  ZeroMemory(&si, sizeof(si));
+  ZeroMemory(&pi, sizeof(pi));
+  si.cb = sizeof(si);
 
   SetLastError(0);
   SearchPathA(NULL, szExe, ".exe", ARRAYSIZE(szFullExe), szFullExe, &pszFileExe);
+
+  DWORD dwFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED;
 
   if (!DetourCreateProcessWithDllsA(szFullExe[0] ? szFullExe : NULL, szCommand,
     NULL, NULL, TRUE, dwFlags, NULL, NULL,
@@ -156,7 +170,38 @@ int main(int argc, char** argv)
     ExitProcess(9009);
   }
 
+  // Wait for the child process starts running..
   ResumeThread(pi.hThread);
+
+  // Blocks until the child process connects to the pipe.
+  ConnectNamedPipe(hPipe, NULL);
+
+  while (true)
+  {
+    char buf[1024];
+    DWORD dwRead = 0;
+
+    // Blocks until the child process writes to the pipe or closes the pipe.
+    BOOL res = ReadFile(
+      hPipe,
+      buf,
+      sizeof(buf) - 1,
+      &dwRead,
+      NULL);
+  
+    if (!res)
+    {
+      DWORD err = GetLastError();
+      if (err == ERROR_BROKEN_PIPE)
+        break;
+    }
+    else if (dwRead > 0)
+    {
+      buf[dwRead] = '\0';
+      printf("profiler.exe: %s", buf);
+      fflush(stdout);
+    }
+  }
 
   WaitForSingleObject(pi.hProcess, INFINITE);
 
