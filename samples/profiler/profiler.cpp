@@ -31,6 +31,29 @@ static BOOL CALLBACK ExportCallback(
   return TRUE;
 }
 
+struct PipeScope
+{
+  ~PipeScope()
+  {
+    close();
+  }
+
+  void close()
+  {
+    if (hPipe || hPipe == INVALID_HANDLE_VALUE)
+    {
+      DisconnectNamedPipe(hPipe);
+      hPipe = INVALID_HANDLE_VALUE;
+    }
+  }
+
+  HANDLE& hPipe;
+};
+
+static HANDLE ghPipe;
+
+static PipeScope gPipeScope { ghPipe };
+
 int main(int argc, char** argv)
 {
   std::vector<LPCSTR> rpszDllsRaw {};
@@ -137,13 +160,13 @@ int main(int argc, char** argv)
   fflush(stdout);
 
   //////////////////////////////////////////////////////////////////////////
-  HANDLE hPipe = CreateNamedPipeA(
+  ghPipe = CreateNamedPipeA(
     "\\\\.\\pipe\\profiler_pipe",
     PIPE_ACCESS_INBOUND,
     PIPE_TYPE_BYTE | PIPE_WAIT,
     1, 0, 0, 0, NULL);
   
-  if (hPipe == NULL || hPipe == INVALID_HANDLE_VALUE) {
+  if (ghPipe == NULL || ghPipe == INVALID_HANDLE_VALUE) {
     printf("profiler.exe: CreateNamedPipe failed: %ld\n", GetLastError());
     return 9005;
   }
@@ -174,7 +197,7 @@ int main(int argc, char** argv)
   ResumeThread(pi.hThread);
 
   // Blocks until the child process connects to the pipe.
-  ConnectNamedPipe(hPipe, NULL);
+  ConnectNamedPipe(ghPipe, NULL);
 
   //////////////////////////////////////////////////////////////////////////
   while (true)
@@ -184,7 +207,7 @@ int main(int argc, char** argv)
 
     // Blocks until the child process writes to the pipe or closes the pipe.
     BOOL res = ReadFile(
-      hPipe,
+      ghPipe,
       buf,
       sizeof(buf) - 1,
       &dwRead,
