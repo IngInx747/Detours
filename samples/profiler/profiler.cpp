@@ -176,9 +176,10 @@ int main(int argc, char** argv)
   // Blocks until the child process connects to the pipe.
   ConnectNamedPipe(hPipe, NULL);
 
+  //////////////////////////////////////////////////////////////////////////
   while (true)
   {
-    char buf[1024];
+    char buf[1024]{};
     DWORD dwRead = 0;
 
     // Blocks until the child process writes to the pipe or closes the pipe.
