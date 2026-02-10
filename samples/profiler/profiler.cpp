@@ -33,17 +33,15 @@ static BOOL CALLBACK ExportCallback(
 
 struct PipeScope
 {
-  ~PipeScope()
-  {
-    close();
-  }
+  ~PipeScope() { close(); }
 
   void close()
   {
-    if (hPipe || hPipe == INVALID_HANDLE_VALUE)
+    if (hPipe && hPipe != INVALID_HANDLE_VALUE)
     {
       DisconnectNamedPipe(hPipe);
       hPipe = INVALID_HANDLE_VALUE;
+      printf("profiler.exe: Pipe closed.\n");
     }
   }
 
@@ -93,19 +91,20 @@ int main(int argc, char** argv)
 
   for (const auto &rpszDllRaw : rpszDllsRaw)
   {
-    CHAR szDllPath[1024];
-    PCHAR pszFilePart = NULL;
+    CHAR buf[1024];
 
-    if (!GetFullPathNameA(rpszDllRaw, ARRAYSIZE(szDllPath), szDllPath, &pszFilePart)) {
+    if (!GetFullPathNameA(rpszDllRaw, ARRAYSIZE(buf), buf, NULL))
+    {
       printf("profiler.exe: Error: %s is not a valid path name..\n", rpszDllRaw);
       return 9002;
     }
 
-    rpszDllsOut.emplace_back(szDllPath);
+    rpszDllsOut.emplace_back(buf);
     const auto &dllPath = rpszDllsOut.back();
-
     HMODULE hDll = LoadLibraryExA(dllPath.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES);
-    if (hDll == NULL) {
+
+    if (hDll == NULL)
+    {
       printf("profiler.exe: Error: %s failed to load (error %ld).\n", dllPath.c_str(), GetLastError());
       return 9003;
     }
@@ -114,7 +113,8 @@ int main(int argc, char** argv)
     DetourEnumerateExports(hDll, &ec, ExportCallback);
     FreeLibrary(hDll);
 
-    if (!ec.fHasOrdinal1) {
+    if (!ec.fHasOrdinal1)
+    {
       printf("profiler.exe: Error: %s does not export ordinal #1.\n", dllPath.c_str());
       printf("              See help entry DetourCreateProcessWithDllEx in Detours.chm.\n");
       return 9004;
@@ -123,40 +123,31 @@ int main(int argc, char** argv)
 
   DWORD nDlls {};
   LPCSTR rpszDllsRef[1024];
-  for (const auto &rpszDll : rpszDllsOut) {
+  for (const auto &rpszDll : rpszDllsOut)
     rpszDllsRef[nDlls++] = rpszDll.c_str();
-  }
 
   //////////////////////////////////////////////////////////////////////////
-  CHAR szCommand[2048];
-  CHAR szExe[1024];
-  CHAR szFullExe[1024] = "\0";
-  PCHAR pszFileExe = NULL;
-
-  szCommand[0] = L'\0';
-
-  StringCchCopyA(szExe, sizeof(szExe), argv[arg]);
+  std::string exePath(argv[arg]);
+  std::string command {};
 
   for (; arg < argc; arg++)
   {
-    if (strchr(argv[arg], ' ') != NULL || strchr(argv[arg], '\t') != NULL) {
-      StringCchCatA(szCommand, sizeof(szCommand), "\"");
-      StringCchCatA(szCommand, sizeof(szCommand), argv[arg]);
-      StringCchCatA(szCommand, sizeof(szCommand), "\"");
+    if (strchr(argv[arg], ' ') || strchr(argv[arg], '\t'))
+    {
+      command.append("\"");
+      command.append(argv[arg]);
+      command.append("\"");
     }
-    else {
-      StringCchCatA(szCommand, sizeof(szCommand), argv[arg]);
-    }
+    else
+      command.append(argv[arg]);
 
-    if (arg + 1 < argc) {
-      StringCchCatA(szCommand, sizeof(szCommand), " ");
-    }
+    if (arg + 1 < argc)
+      command.append(" ");
   }
 
-  printf("profiler.exe: Starting: `%s'\n", szCommand);
-  for (const auto &rpszDll : rpszDllsOut) {
-    printf("profiler.exe:   with `%s'\n", rpszDll.c_str());
-  }
+  printf("profiler.exe: Starting: `%s`\n", command.c_str());
+  for (const auto &rpszDll : rpszDllsOut)
+    printf("profiler.exe: with `%s`\n", rpszDll.c_str());
   fflush(stdout);
 
   //////////////////////////////////////////////////////////////////////////
@@ -164,12 +155,18 @@ int main(int argc, char** argv)
     "\\\\.\\pipe\\profiler_pipe",
     PIPE_ACCESS_INBOUND,
     PIPE_TYPE_BYTE | PIPE_WAIT,
-    1, 0, 0, 0, NULL);
+    1,
+    0,
+    0,
+    0,
+    NULL);
   
-  if (ghPipe == NULL || ghPipe == INVALID_HANDLE_VALUE) {
+  if (ghPipe == NULL || ghPipe == INVALID_HANDLE_VALUE)
+  {
     printf("profiler.exe: CreateNamedPipe failed: %ld\n", GetLastError());
     return 9005;
   }
+  else printf("profiler.exe: Pipe opened: %p\n", ghPipe);
 
   //////////////////////////////////////////////////////////////////////////
   STARTUPINFOA si;
@@ -180,16 +177,30 @@ int main(int argc, char** argv)
   si.cb = sizeof(si);
 
   SetLastError(0);
-  SearchPathA(NULL, szExe, ".exe", ARRAYSIZE(szFullExe), szFullExe, &pszFileExe);
+
+  CHAR buf[1024] = "\0";
+  SearchPathA(NULL, exePath.c_str(), ".exe", ARRAYSIZE(buf), buf, NULL);
+  exePath.clear();
+  exePath.append(buf);
 
   DWORD dwFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED;
 
-  if (!DetourCreateProcessWithDllsA(szFullExe[0] ? szFullExe : NULL, szCommand,
-    NULL, NULL, TRUE, dwFlags, NULL, NULL,
-    &si, &pi, nDlls, rpszDllsRef, NULL))
+  if (!DetourCreateProcessWithDllsA(
+    exePath.c_str(),
+    const_cast<LPSTR>(command.c_str()),
+    NULL,
+    NULL,
+    TRUE,
+    dwFlags,
+    NULL,
+    NULL,
+    &si,
+    &pi,
+    nDlls,
+    rpszDllsRef,
+    NULL))
   {
-    DWORD dwError = GetLastError();
-    printf("profiler.exe: DetourCreateProcessWithDllEx failed: %ld\n", dwError);
+    printf("profiler.exe: DetourCreateProcessWithDllEx failed: %ld\n", GetLastError());
     ExitProcess(9009);
   }
 
@@ -229,10 +240,10 @@ int main(int argc, char** argv)
 
   WaitForSingleObject(pi.hProcess, INFINITE);
 
-  DWORD dwResult = 0;
-  if (!GetExitCodeProcess(pi.hProcess, &dwResult)) {
-      printf("profiler.exe: GetExitCodeProcess failed: %ld\n", GetLastError());
-      return 9010;
+  DWORD dwResult = 0; if (!GetExitCodeProcess(pi.hProcess, &dwResult))
+  {
+    printf("profiler.exe: GetExitCodeProcess failed: %ld\n", GetLastError());
+    return 9010;
   }
 
   return dwResult;

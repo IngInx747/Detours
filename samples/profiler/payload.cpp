@@ -18,10 +18,12 @@ struct PipeScope
 
   void close()
   {
-    if (hPipe || hPipe == INVALID_HANDLE_VALUE)
+    if (hPipe && hPipe != INVALID_HANDLE_VALUE)
     {
       CloseHandle(hPipe);
       hPipe = INVALID_HANDLE_VALUE;
+      printf("profiler_payload.exe: Pipe closed.\n");
+      fflush(stdout);
     }
   }
 
@@ -37,7 +39,6 @@ static PipeScope gPipeScope { ghPipe };
 static PVOID GetFunctionAddress(HANDLE hProcess, PCSTR Name)
 {
   SYMBOL_INFO syminfo = { 0 };
-  SymInitialize(hProcess, NULL, true);
   syminfo.SizeOfStruct = sizeof(syminfo);
   SymFromName(hProcess, Name, &syminfo);
   return (PVOID)syminfo.Address;
@@ -72,8 +73,8 @@ static void detoured_foo()
   auto end = clock();
 
   double secs = double(end - begin) / CLOCKS_PER_SEC;
-  printf("foo finished %lf\n", secs);
-  fflush(stdout);
+  //printf("foo finished %lf\n", secs);
+  //fflush(stdout);
 
   if (ghPipe > 0)
   {
@@ -101,7 +102,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
     DetourRestoreAfterWith();
     printf("profiler_payload.dll: Loaded.\n"); fflush(stdout);
 
-    original_foo = (functor_foo)GetFunctionAddress(GetCurrentProcess(), foo_name);
+    HANDLE hProcess = GetCurrentProcess();
+    SymInitialize(hProcess, NULL, true);
+
+    original_foo = (functor_foo)GetFunctionAddress(hProcess, foo_name);
     if (!original_foo) printf("profiler_payload.dll: Error finding address of %s\n", foo_name);
 
     LONG error = HookFunction((PVOID&)original_foo, (PVOID)detoured_foo);
@@ -124,8 +128,6 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
   {
     LONG error = UnhookFunction((PVOID&)original_foo, (PVOID)detoured_foo);
     if (error) printf("profiler_payload.dll: Error unhooking %s: %ld\n", foo_name, error);
-
-    gPipeScope.close();
 
     printf("profiler_payload.dll: Unloaded\n"); fflush(stdout);
   }

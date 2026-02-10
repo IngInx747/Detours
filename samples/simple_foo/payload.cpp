@@ -23,7 +23,6 @@
 static void *GetFunctionAddress(HANDLE hProcess, PCSTR Name)
 {
     SYMBOL_INFO syminfo = { 0 };
-    SymInitialize(hProcess, NULL, true);
     syminfo.SizeOfStruct = sizeof(syminfo);
     SymFromName(hProcess, Name, &syminfo);
     return (void*)syminfo.Address;
@@ -70,7 +69,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         DetourRestoreAfterWith();
         printf("foo_payload.dll: Loaded.\n"); fflush(stdout);
 
-        original_foo = (functor_foo)GetFunctionAddress(GetCurrentProcess(), "foo");
+        HANDLE hProcess = GetCurrentProcess();
+        SymInitialize(hProcess, NULL, true);
+
+        original_foo = (functor_foo)GetFunctionAddress(hProcess, "foo");
         error = HookFunction((PVOID&)original_foo, detoured_foo);
         if (error) printf("foo_payload.dll: Error detouring foo(): err = %ld\n", error);
     }
