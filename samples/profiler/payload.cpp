@@ -9,30 +9,29 @@
 
 //////////////////////////////////////////////////////////////////////////
 
-struct PipeScope
+struct HandleScope
 {
-  ~PipeScope()
-  {
-    close();
-  }
+  ~HandleScope() { close(); }
 
   void close()
   {
-    if (hPipe && hPipe != INVALID_HANDLE_VALUE)
+    if (h_ && h_ != INVALID_HANDLE_VALUE)
     {
-      CloseHandle(hPipe);
-      hPipe = INVALID_HANDLE_VALUE;
-      printf("profiler_payload.exe: Pipe closed.\n");
+      CloseHandle(h_);
+      h_ = INVALID_HANDLE_VALUE;
+      printf("[Payload]: Pipe closed.\n");
       fflush(stdout);
     }
   }
 
-  HANDLE& hPipe;
+  HANDLE h_ = INVALID_HANDLE_VALUE;
 };
 
-static HANDLE ghPipe;
-
-static PipeScope gPipeScope { ghPipe };
+static HANDLE &the_pipe()
+{
+  static HandleScope scope__ {};
+  return scope__.h_;
+}
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -66,6 +65,7 @@ static void (*original_foo)(void) {};
 
 static void detoured_foo()
 {
+  HANDLE &pipe = the_pipe();
   auto begin = clock();
   original_foo();
   auto end = clock();
@@ -74,12 +74,12 @@ static void detoured_foo()
   //printf("foo finished %lf\n", secs);
   //fflush(stdout);
 
-  if (ghPipe > 0)
+  if (pipe && pipe != INVALID_HANDLE_VALUE)
   {
     std::stringstream ss;
     ss << "foo finished " << secs << "\n";
     BOOL res = WriteFile(
-      ghPipe,
+      pipe,
       ss.str().c_str(),
       (DWORD)ss.str().size(),
       NULL, NULL);
@@ -92,6 +92,7 @@ static void (A::*original_Afo)(void) {};
 
 static void detoured_Afo(A *_this)
 {
+  HANDLE &pipe = the_pipe();
   auto begin = clock();
   (_this->*original_Afo)();
   auto end = clock();
@@ -100,12 +101,12 @@ static void detoured_Afo(A *_this)
   //printf("A::foo finished %lf\n", secs);
   //fflush(stdout);
 
-  if (ghPipe > 0)
+  if (pipe && pipe != INVALID_HANDLE_VALUE)
   {
     std::stringstream ss;
     ss << "A::foo finished " << secs << "\n";
     BOOL res = WriteFile(
-      ghPipe,
+      pipe,
       ss.str().c_str(),
       (DWORD)ss.str().size(),
       NULL, NULL);
@@ -134,10 +135,12 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 
   if (DetourIsHelperProcess()) return TRUE;
 
+  HANDLE &pipe = the_pipe();
+
   if (dwReason == DLL_PROCESS_ATTACH)
   {
     DetourRestoreAfterWith();
-    printf("profiler_payload.dll: Loaded.\n"); fflush(stdout);
+    printf("[Payload]: Loaded.\n"); fflush(stdout);
 
     HANDLE hProcess = GetCurrentProcess();
     SymInitialize(hProcess, NULL, true);
@@ -145,13 +148,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
     for (auto &fi : funcInfos)
     {
       fi.target = GetFunctionAddress(hProcess, fi.name);
-      if (!fi.target) printf("profiler_payload.dll: Error finding address of %s\n", fi.name);
+      if (!fi.target) printf("[Payload]: Error finding address of %s\n", fi.name);
 
       LONG error = HookFunction(fi.target, fi.payload);
-      if (error) printf("profiler_payload.dll: Error hooking %s: %ld\n", fi.name, error);
+      if (error) printf("[Payload]: Error hooking %s: %ld\n", fi.name, error);
     }
 
-    ghPipe = CreateFileA(
+    pipe = CreateFileA(
       "\\\\.\\pipe\\profiler_pipe",
       GENERIC_WRITE,
       0,
@@ -159,20 +162,20 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
       OPEN_EXISTING,
       0,
       NULL);
-    if (ghPipe == NULL || ghPipe == INVALID_HANDLE_VALUE)
-      printf("profiler_payload.dll: Error opening pipe: %d\n", GetLastError());
+    if (!pipe || pipe == INVALID_HANDLE_VALUE)
+      printf("[Payload]: Error opening pipe: %d\n", GetLastError());
     else
-      printf("profiler_payload.dll: Pipe opened: %p.\n", ghPipe);
+      printf("[Payload]: Pipe opened: %p.\n", pipe);
   }
   else if (dwReason == DLL_PROCESS_DETACH)
   {
     for (auto &fi : funcInfos)
     {
       LONG error = UnhookFunction(fi.target, fi.payload);
-      if (error) printf("profiler_payload.dll: Error unhooking %s: %ld\n", fi.name, error);
+      if (error) printf("[Payload]: Error unhooking %s: %ld\n", fi.name, error);
     }
 
-    printf("profiler_payload.dll: Unloaded\n"); fflush(stdout);
+    printf("[Payload]: Unloaded\n"); fflush(stdout);
   }
   return TRUE;
 }

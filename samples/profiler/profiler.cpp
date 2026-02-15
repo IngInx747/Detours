@@ -31,26 +31,29 @@ static BOOL CALLBACK ExportCallback(
   return TRUE;
 }
 
-struct PipeScope
+struct HandleScope
 {
-  ~PipeScope() { close(); }
+  ~HandleScope() { close(); }
 
   void close()
   {
-    if (hPipe && hPipe != INVALID_HANDLE_VALUE)
+    if (h_ && h_ != INVALID_HANDLE_VALUE)
     {
-      DisconnectNamedPipe(hPipe);
-      hPipe = INVALID_HANDLE_VALUE;
-      printf("profiler.exe: Pipe closed.\n");
+      CloseHandle(h_);
+      h_ = INVALID_HANDLE_VALUE;
+      printf("[Profiler]: Pipe closed.\n");
+      fflush(stdout);
     }
   }
 
-  HANDLE& hPipe;
+  HANDLE h_ = INVALID_HANDLE_VALUE;
 };
 
-static HANDLE ghPipe;
-
-static PipeScope gPipeScope { ghPipe };
+static HANDLE &the_pipe()
+{
+  static HandleScope scope__ {};
+  return scope__.h_;
+}
 
 int main(int argc, char** argv)
 {
@@ -72,7 +75,7 @@ int main(int argc, char** argv)
       break;
 
     default:
-      printf("profiler.exe: Bad argument: %s\n", argv[arg]);
+      printf("[Profiler]: Bad argument: %s\n", argv[arg]);
       break;
     }
   }
@@ -95,7 +98,7 @@ int main(int argc, char** argv)
 
     if (!GetFullPathNameA(rpszDllRaw, ARRAYSIZE(buf), buf, NULL))
     {
-      printf("profiler.exe: Error: %s is not a valid path name..\n", rpszDllRaw);
+      printf("[Profiler]: Error: %s is not a valid path name..\n", rpszDllRaw);
       return 9002;
     }
 
@@ -105,7 +108,7 @@ int main(int argc, char** argv)
 
     if (hDll == NULL)
     {
-      printf("profiler.exe: Error: %s failed to load (error %ld).\n", dllPath.c_str(), GetLastError());
+      printf("[Profiler]: Error: %s failed to load (error %ld).\n", dllPath.c_str(), GetLastError());
       return 9003;
     }
 
@@ -115,7 +118,7 @@ int main(int argc, char** argv)
 
     if (!ec.fHasOrdinal1)
     {
-      printf("profiler.exe: Error: %s does not export ordinal #1.\n", dllPath.c_str());
+      printf("[Profiler]: Error: %s does not export ordinal #1.\n", dllPath.c_str());
       printf("              See help entry DetourCreateProcessWithDllEx in Detours.chm.\n");
       return 9004;
     }
@@ -145,13 +148,15 @@ int main(int argc, char** argv)
       command.append(" ");
   }
 
-  printf("profiler.exe: Starting: `%s`\n", command.c_str());
+  printf("[Profiler]: Starting: `%s`\n", command.c_str());
   for (const auto &rpszDll : rpszDllsOut)
-    printf("profiler.exe: with `%s`\n", rpszDll.c_str());
+    printf("[Profiler]: with `%s`\n", rpszDll.c_str());
   fflush(stdout);
 
   //////////////////////////////////////////////////////////////////////////
-  ghPipe = CreateNamedPipeA(
+  HANDLE &pipe = the_pipe();
+
+  pipe = CreateNamedPipeA(
     "\\\\.\\pipe\\profiler_pipe",
     PIPE_ACCESS_INBOUND,
     PIPE_TYPE_BYTE | PIPE_WAIT,
@@ -161,12 +166,12 @@ int main(int argc, char** argv)
     0,
     NULL);
   
-  if (ghPipe == NULL || ghPipe == INVALID_HANDLE_VALUE)
+  if (!pipe || pipe == INVALID_HANDLE_VALUE)
   {
-    printf("profiler.exe: CreateNamedPipe failed: %ld\n", GetLastError());
+    printf("[Profiler]: CreateNamedPipe failed: %ld\n", GetLastError());
     return 9005;
   }
-  else printf("profiler.exe: Pipe opened: %p\n", ghPipe);
+  else printf("[Profiler]: Pipe opened: %p\n", pipe);
 
   //////////////////////////////////////////////////////////////////////////
   STARTUPINFOA si;
@@ -200,7 +205,7 @@ int main(int argc, char** argv)
     rpszDllsRef,
     NULL))
   {
-    printf("profiler.exe: DetourCreateProcessWithDllEx failed: %ld\n", GetLastError());
+    printf("[Profiler]: DetourCreateProcessWithDllEx failed: %ld\n", GetLastError());
     ExitProcess(9009);
   }
 
@@ -208,7 +213,7 @@ int main(int argc, char** argv)
   ResumeThread(pi.hThread);
 
   // Blocks until the child process connects to the pipe.
-  ConnectNamedPipe(ghPipe, NULL);
+  ConnectNamedPipe(pipe, NULL);
 
   //////////////////////////////////////////////////////////////////////////
   while (true)
@@ -218,7 +223,7 @@ int main(int argc, char** argv)
 
     // Blocks until the child process writes to the pipe or closes the pipe.
     BOOL res = ReadFile(
-      ghPipe,
+      pipe,
       buf,
       sizeof(buf) - 1,
       &dwRead,
@@ -233,7 +238,7 @@ int main(int argc, char** argv)
     else if (dwRead > 0)
     {
       buf[dwRead] = '\0';
-      printf("profiler.exe: %s", buf);
+      printf("[Profiler]: %s", buf);
       fflush(stdout);
     }
   }
@@ -242,7 +247,7 @@ int main(int argc, char** argv)
 
   DWORD dwResult = 0; if (!GetExitCodeProcess(pi.hProcess, &dwResult))
   {
-    printf("profiler.exe: GetExitCodeProcess failed: %ld\n", GetLastError());
+    printf("[Profiler]: GetExitCodeProcess failed: %ld\n", GetLastError());
     return 9010;
   }
 
